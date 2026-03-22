@@ -12,6 +12,7 @@ import cv2
 
 # ── Step 1: キーリマッピング ──────────────────────────────────────────────
 
+
 def remap_keys_for_mlx_vlm(src_path: str, dst_dir: str):
     dst_dir = Path(dst_dir)
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -25,10 +26,10 @@ def remap_keys_for_mlx_vlm(src_path: str, dst_dir: str):
 
     for key, val in weights.items():
         if key.startswith(PREFIX):
-            new_key = key[len(PREFIX):]
+            new_key = key[len(PREFIX) :]
             # language_model.layers.* → language_model.model.layers.*
             if new_key.startswith("language_model."):
-                new_key = "language_model.model." + new_key[len("language_model."):]
+                new_key = "language_model.model." + new_key[len("language_model.") :]
             remapped[new_key] = val
         else:
             skipped.append(key)
@@ -39,14 +40,19 @@ def remap_keys_for_mlx_vlm(src_path: str, dst_dir: str):
     # embed_tokens と lm_head は tied weights
     # どちらか一方しか保存されていない場合に補完する
     LM_HEAD_KEY = "paligemma_with_expert.paligemma.lm_head.weight"
-    if "language_model.model.embed_tokens.weight" not in remapped \
-            and LM_HEAD_KEY in weights:
+    if (
+        "language_model.model.embed_tokens.weight" not in remapped
+        and LM_HEAD_KEY in weights
+    ):
         remapped["language_model.model.embed_tokens.weight"] = weights[LM_HEAD_KEY]
 
-    elif "language_model.lm_head.weight" not in remapped \
-            and "language_model.model.embed_tokens.weight" in remapped:
-        remapped["language_model.lm_head.weight"] = \
-            remapped["language_model.model.embed_tokens.weight"]
+    elif (
+        "language_model.lm_head.weight" not in remapped
+        and "language_model.model.embed_tokens.weight" in remapped
+    ):
+        remapped["language_model.lm_head.weight"] = remapped[
+            "language_model.model.embed_tokens.weight"
+        ]
 
     out_path = str(dst_dir / "model.safetensors")
     mx.save_safetensors(out_path, remapped)
@@ -55,6 +61,7 @@ def remap_keys_for_mlx_vlm(src_path: str, dst_dir: str):
 
 
 # ── Step 2: mlx-vlm 用の config.json を準備 ──────────────────────────────
+
 
 def prepare_mlx_vlm_config(dst_dir: str):
     """
@@ -100,6 +107,7 @@ def prepare_mlx_vlm_config(dst_dir: str):
 
 # ── Step 3: tokenizer を取得 ──────────────────────────────────────────────
 
+
 def fetch_tokenizer(dst_dir: str):
     from huggingface_hub import snapshot_download
 
@@ -124,6 +132,7 @@ def fetch_tokenizer(dst_dir: str):
 
 
 # ── Step 4: Web から画像を取得（OpenCV）─────────────────────────────────
+
 
 def load_image_from_url(url: str, save_path: str = "/tmp/test_image.png") -> str:
     """
@@ -152,6 +161,7 @@ def load_image_from_url(url: str, save_path: str = "/tmp/test_image.png") -> str
 
 
 # ── Step 5: 動作確認 ──────────────────────────────────────────────────────
+
 
 def verify_phase1(model_dir: str, image_url: str):
     from mlx_vlm import load, generate
@@ -182,7 +192,7 @@ def verify_phase1(model_dir: str, image_url: str):
 
 if __name__ == "__main__":
     SRC_WEIGHTS = "./models/FIwaki/pi05_base_mlx/model.safetensors"  # 変換済み MLX 重み
-    PHASE1_DIR  = "./examples/outputs"
+    PHASE1_DIR = "./examples/outputs"
 
     # COCO のサンプル画像（変更自由）
     IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"

@@ -20,31 +20,32 @@ import numpy as np
 # ═══════════════════════════════════════════════════════════════
 
 # PaliGemma (Gemma 1 / 2B) side
-PG_HIDDEN  = 2048
-PG_LAYERS  = 18
+PG_HIDDEN = 2048
+PG_LAYERS = 18
 
 # GemmaExpert (300M) side  ← pi05_base の重み形状から確定
-EXP_HIDDEN      = 1024
-EXP_INTER       = 4096
-EXP_LAYERS      = 18
-EXP_NUM_Q_HEADS = 8     # q_proj: [2048, 1024] → 2048/256=8
-EXP_NUM_KV_HEADS= 1     # k_proj: [256,  1024] → 256/256=1
-EXP_HEAD_DIM    = 256
-VOCAB_SIZE      = 257152
+EXP_HIDDEN = 1024
+EXP_INTER = 4096
+EXP_LAYERS = 18
+EXP_NUM_Q_HEADS = 8  # q_proj: [2048, 1024] → 2048/256=8
+EXP_NUM_KV_HEADS = 1  # k_proj: [256,  1024] → 256/256=1
+EXP_HEAD_DIM = 256
+VOCAB_SIZE = 257152
 
 # AdaRMSNorm の dense: [3072, 1024]
 # 3072 = PG_HIDDEN(2048) + timestep_emb_dim(1024)
-ADA_DENSE_IN    = 3072   # PG_HIDDEN + EXP_HIDDEN (timestep embedding 次元)
-ADA_DENSE_OUT   = 3072   # 出力は [scale_norm, scale_attn, scale_mlp] を含む
+ADA_DENSE_IN = 3072  # PG_HIDDEN + EXP_HIDDEN (timestep embedding 次元)
+ADA_DENSE_OUT = 3072  # 出力は [scale_norm, scale_attn, scale_mlp] を含む
 
 # Action / time
-ACTION_DIM      = 32
-ACTION_HORIZON  = 50
+ACTION_DIM = 32
+ACTION_HORIZON = 50
 
 
 # ═══════════════════════════════════════════════════════════════
 # 2. AdaRMSNorm
 # ═══════════════════════════════════════════════════════════════
+
 
 class AdaRMSNorm(nn.Module):
     """
@@ -70,15 +71,15 @@ class AdaRMSNorm(nn.Module):
 
     def __call__(self, x: mx.array, timestep_emb: mx.array) -> mx.array:
         # RMSNorm
-        rms = mx.rsqrt(mx.mean(x ** 2, axis=-1, keepdims=True) + 1e-6)
+        rms = mx.rsqrt(mx.mean(x**2, axis=-1, keepdims=True) + 1e-6)
         x_norm = x * rms
 
         # タイムステップから scale を生成
         # timestep_emb: (B, 1024) → dense → (B, 3072)
         # ここでは先頭の EXP_HIDDEN(1024) 次元を scale として使用
-        scale_all = self.dense(timestep_emb)           # (B, 3072)
-        scale = scale_all[:, :EXP_HIDDEN]              # (B, 1024)
-        scale = mx.expand_dims(scale, axis=1)          # (B, 1, 1024)
+        scale_all = self.dense(timestep_emb)  # (B, 3072)
+        scale = scale_all[:, :EXP_HIDDEN]  # (B, 1024)
+        scale = mx.expand_dims(scale, axis=1)  # (B, 1, 1024)
 
         return x_norm * (1.0 + scale)
 
@@ -86,6 +87,7 @@ class AdaRMSNorm(nn.Module):
 # ═══════════════════════════════════════════════════════════════
 # 3. GemmaExpert の Attention
 # ═══════════════════════════════════════════════════════════════
+
 
 class GemmaExpertAttention(nn.Module):
     """
@@ -102,7 +104,7 @@ class GemmaExpertAttention(nn.Module):
 
     def __call__(
         self,
-        x: mx.array,           # (B, T, EXP_HIDDEN)
+        x: mx.array,  # (B, T, EXP_HIDDEN)
         mask: mx.array = None,
     ) -> mx.array:
         B, T, _ = x.shape
@@ -124,13 +126,13 @@ class GemmaExpertAttention(nn.Module):
 
         # scaled dot-product attention
         scale = math.sqrt(EXP_HEAD_DIM)
-        attn = (q @ k.transpose(0, 1, 3, 2)) / scale   # (B, 8, T, T)
+        attn = (q @ k.transpose(0, 1, 3, 2)) / scale  # (B, 8, T, T)
 
         if mask is not None:
             attn = attn + mask
 
         attn = mx.softmax(attn.astype(mx.float32), axis=-1).astype(x.dtype)
-        out  = (attn @ v).transpose(0, 2, 1, 3).reshape(B, T, -1)
+        out = (attn @ v).transpose(0, 2, 1, 3).reshape(B, T, -1)
         return self.o_proj(out)
 
 
@@ -138,12 +140,13 @@ class GemmaExpertAttention(nn.Module):
 # 4. GemmaExpert の MLP (SiLU gate)
 # ═══════════════════════════════════════════════════════════════
 
+
 class GemmaExpertMLP(nn.Module):
     def __init__(self):
         super().__init__()
         self.gate_proj = nn.Linear(EXP_HIDDEN, EXP_INTER, bias=False)
-        self.up_proj   = nn.Linear(EXP_HIDDEN, EXP_INTER, bias=False)
-        self.down_proj = nn.Linear(EXP_INTER,  EXP_HIDDEN, bias=False)
+        self.up_proj = nn.Linear(EXP_HIDDEN, EXP_INTER, bias=False)
+        self.down_proj = nn.Linear(EXP_INTER, EXP_HIDDEN, bias=False)
 
     def __call__(self, x: mx.array) -> mx.array:
         return self.down_proj(nn.silu(self.gate_proj(x)) * self.up_proj(x))
@@ -153,18 +156,19 @@ class GemmaExpertMLP(nn.Module):
 # 5. GemmaExpert の 1 層
 # ═══════════════════════════════════════════════════════════════
 
+
 class GemmaExpertLayer(nn.Module):
     def __init__(self):
         super().__init__()
-        self.self_attn                = GemmaExpertAttention()
-        self.mlp                      = GemmaExpertMLP()
-        self.input_layernorm          = AdaRMSNorm()
+        self.self_attn = GemmaExpertAttention()
+        self.mlp = GemmaExpertMLP()
+        self.input_layernorm = AdaRMSNorm()
         self.post_attention_layernorm = AdaRMSNorm()
 
     def __call__(
         self,
-        x: mx.array,            # (B, T_total, EXP_HIDDEN)
-        timestep_emb: mx.array, # (B, EXP_HIDDEN)
+        x: mx.array,  # (B, T_total, EXP_HIDDEN)
+        timestep_emb: mx.array,  # (B, EXP_HIDDEN)
         mask: mx.array = None,
     ) -> mx.array:
         # pre-norm → attention → residual
@@ -184,6 +188,7 @@ class GemmaExpertLayer(nn.Module):
 # 6. GemmaExpert モデル全体
 # ═══════════════════════════════════════════════════════════════
 
+
 class GemmaExpert(nn.Module):
     """
     Action Expert (300M)。
@@ -200,7 +205,7 @@ class GemmaExpert(nn.Module):
     def __init__(self):
         super().__init__()
         self.layers = [GemmaExpertLayer() for _ in range(EXP_LAYERS)]
-        self.norm    = AdaRMSNorm()           # final norm
+        self.norm = AdaRMSNorm()  # final norm
 
         # PaliGemma hidden (2048) → EXP_HIDDEN (1024) への射影
         # ※ 重みとしては存在しないため線形変換で近似
@@ -209,14 +214,14 @@ class GemmaExpert(nn.Module):
 
     def __call__(
         self,
-        pg_hidden: mx.array,      # (B, T_prefix, PG_HIDDEN=2048)  PaliGemma 出力
-        action_emb: mx.array,     # (B, T_action, EXP_HIDDEN=1024) action tokens
-        timestep_emb: mx.array,   # (B, EXP_HIDDEN=1024)           タイムステップ埋め込み
+        pg_hidden: mx.array,  # (B, T_prefix, PG_HIDDEN=2048)  PaliGemma 出力
+        action_emb: mx.array,  # (B, T_action, EXP_HIDDEN=1024) action tokens
+        timestep_emb: mx.array,  # (B, EXP_HIDDEN=1024)           タイムステップ埋め込み
     ) -> mx.array:
         B = pg_hidden.shape[0]
         T_prefix = pg_hidden.shape[1]
         T_action = action_emb.shape[1]
-        T_total  = T_prefix + T_action
+        T_total = T_prefix + T_action
 
         # PaliGemma hidden を EXP_HIDDEN に射影
         pg_proj = self.pg_proj(pg_hidden)  # (B, T_prefix, 1024)
@@ -229,7 +234,7 @@ class GemmaExpert(nn.Module):
             x = layer(x, timestep_emb, mask=None)
 
         # action 部分だけ取り出して final norm
-        x_action = x[:, T_prefix:, :]                # (B, T_action, 1024)
+        x_action = x[:, T_prefix:, :]  # (B, T_action, 1024)
         x_action = self.norm(x_action, timestep_emb)  # AdaRMSNorm
 
         return x_action  # (B, T_action, EXP_HIDDEN)
@@ -238,6 +243,7 @@ class GemmaExpert(nn.Module):
 # ═══════════════════════════════════════════════════════════════
 # 7. タイムステップ埋め込み (Fourier + MLP)
 # ═══════════════════════════════════════════════════════════════
+
 
 class TimestepEmbedding(nn.Module):
     """
@@ -248,11 +254,12 @@ class TimestepEmbedding(nn.Module):
       time_mlp_out.weight [1024, 1024]
       time_mlp_out.bias   [1024]
     """
+
     def __init__(self, min_period: float = 0.004, max_period: float = 4.0):
         super().__init__()
         self.min_period = min_period
         self.max_period = max_period
-        self.mlp_in  = nn.Linear(EXP_HIDDEN, EXP_HIDDEN, bias=True)
+        self.mlp_in = nn.Linear(EXP_HIDDEN, EXP_HIDDEN, bias=True)
         self.mlp_out = nn.Linear(EXP_HIDDEN, EXP_HIDDEN, bias=True)
 
     def __call__(self, t: mx.array) -> mx.array:
@@ -268,27 +275,27 @@ class TimestepEmbedding(nn.Module):
                 math.log(1.0 / self.min_period),
                 half,
             )
-        )                                               # (half,)
-        t_exp = mx.expand_dims(t, -1) * freqs          # (B, half)
-        emb = mx.concatenate(
-            [mx.sin(t_exp), mx.cos(t_exp)], axis=-1
-        )                                               # (B, EXP_HIDDEN)
+        )  # (half,)
+        t_exp = mx.expand_dims(t, -1) * freqs  # (B, half)
+        emb = mx.concatenate([mx.sin(t_exp), mx.cos(t_exp)], axis=-1)  # (B, EXP_HIDDEN)
 
         # MLP: in → SiLU → out
         emb = nn.silu(self.mlp_in(emb))
         emb = self.mlp_out(emb)
-        return emb                                      # (B, EXP_HIDDEN)
+        return emb  # (B, EXP_HIDDEN)
 
 
 # ═══════════════════════════════════════════════════════════════
 # 8. アクション エンコーダ / デコーダ
 # ═══════════════════════════════════════════════════════════════
 
+
 class ActionEncoder(nn.Module):
     """
     連続アクション (B, T, ACTION_DIM) → (B, T, EXP_HIDDEN)
     action_in_proj.weight [1024, 32], bias [1024]
     """
+
     def __init__(self):
         super().__init__()
         self.proj = nn.Linear(ACTION_DIM, EXP_HIDDEN, bias=True)
@@ -302,6 +309,7 @@ class ActionDecoder(nn.Module):
     (B, T, EXP_HIDDEN) → (B, T, ACTION_DIM)  velocity field v_θ
     action_out_proj.weight [32, 1024], bias [32]
     """
+
     def __init__(self):
         super().__init__()
         self.proj = nn.Linear(EXP_HIDDEN, ACTION_DIM, bias=True)
@@ -313,6 +321,7 @@ class ActionDecoder(nn.Module):
 # ═══════════════════════════════════════════════════════════════
 # 9. 重みロード
 # ═══════════════════════════════════════════════════════════════
+
 
 def load_expert_weights(
     model: nn.Module,
@@ -328,7 +337,11 @@ def load_expert_weights(
       time_mlp_in.*     → timestep_emb.mlp_in.*
       time_mlp_out.*    → timestep_emb.mlp_out.*
     """
-    src_path = str(Path(src_path) / "model.safetensors") if Path(src_path).is_dir() else src_path
+    src_path = (
+        str(Path(src_path) / "model.safetensors")
+        if Path(src_path).is_dir()
+        else src_path
+    )
     print(f"Loading expert weights from {src_path} ...")
     raw = mx.load(src_path)
 
@@ -338,23 +351,23 @@ def load_expert_weights(
     for key, val in raw.items():
         # GemmaExpert layers / norm
         if key.startswith(EXP_PREFIX + "layers."):
-            new_key = "gemma_expert." + key[len(EXP_PREFIX):]
+            new_key = "gemma_expert." + key[len(EXP_PREFIX) :]
             weights[new_key] = val
         elif key.startswith(EXP_PREFIX + "norm."):
-            new_key = "gemma_expert." + key[len(EXP_PREFIX):]
+            new_key = "gemma_expert." + key[len(EXP_PREFIX) :]
             weights[new_key] = val
 
         # action proj
         elif key.startswith("action_in_proj."):
-            weights["action_encoder.proj." + key[len("action_in_proj."):]] = val
+            weights["action_encoder.proj." + key[len("action_in_proj.") :]] = val
         elif key.startswith("action_out_proj."):
-            weights["action_decoder.proj." + key[len("action_out_proj."):]] = val
+            weights["action_decoder.proj." + key[len("action_out_proj.") :]] = val
 
         # time MLP
         elif key.startswith("time_mlp_in."):
-            weights["timestep_emb.mlp_in." + key[len("time_mlp_in."):]] = val
+            weights["timestep_emb.mlp_in." + key[len("time_mlp_in.") :]] = val
         elif key.startswith("time_mlp_out."):
-            weights["timestep_emb.mlp_out." + key[len("time_mlp_out."):]] = val
+            weights["timestep_emb.mlp_out." + key[len("time_mlp_out.") :]] = val
 
     print(f"  Mapped {len(weights)} expert keys")
     model.load_weights(list(weights.items()), strict=False)
@@ -366,27 +379,29 @@ def load_expert_weights(
 # 10. Phase 2 統合モデル (PaliGemma + GemmaExpert)
 # ═══════════════════════════════════════════════════════════════
 
+
 class Pi05Phase2(nn.Module):
     """
     Phase 2 の統合モデル。
     PaliGemma (mlx-vlm でロード済み) の hidden states と
     GemmaExpert を接続し、velocity field を出力する。
     """
+
     def __init__(self):
         super().__init__()
-        self.gemma_expert   = GemmaExpert()
+        self.gemma_expert = GemmaExpert()
         self.action_encoder = ActionEncoder()
         self.action_decoder = ActionDecoder()
-        self.timestep_emb   = TimestepEmbedding()
+        self.timestep_emb = TimestepEmbedding()
 
     def __call__(
         self,
-        pg_hidden: mx.array,      # (B, T_prefix, 2048)  PaliGemma の最終 hidden states
+        pg_hidden: mx.array,  # (B, T_prefix, 2048)  PaliGemma の最終 hidden states
         noisy_actions: mx.array,  # (B, T_action, 32)    ノイズ付きアクション
-        timestep: mx.array,       # (B,)                 τ ∈ [0, 1]
+        timestep: mx.array,  # (B,)                 τ ∈ [0, 1]
     ) -> mx.array:
         # タイムステップ埋め込み
-        t_emb = self.timestep_emb(timestep)         # (B, 1024)
+        t_emb = self.timestep_emb(timestep)  # (B, 1024)
 
         # アクションを EXP_HIDDEN に射影
         action_emb = self.action_encoder(noisy_actions)  # (B, T_action, 1024)
@@ -395,13 +410,14 @@ class Pi05Phase2(nn.Module):
         h = self.gemma_expert(pg_hidden, action_emb, t_emb)  # (B, T_action, 1024)
 
         # velocity field に変換
-        velocity = self.action_decoder(h)           # (B, T_action, 32)
+        velocity = self.action_decoder(h)  # (B, T_action, 32)
         return velocity
 
 
 # ═══════════════════════════════════════════════════════════════
 # 11. 動作確認
 # ═══════════════════════════════════════════════════════════════
+
 
 def verify_phase2(src_weights: str):
     print("\n=== Phase 2: GemmaExpert + Global Attention ===")
@@ -414,13 +430,13 @@ def verify_phase2(src_weights: str):
     mx.eval(model.parameters())
 
     # ダミー入力でフォワードパス確認
-    B          = 1
-    T_prefix   = 256 + 10   # 画像256トークン + 言語10トークン（例）
-    T_action   = ACTION_HORIZON
+    B = 1
+    T_prefix = 256 + 10  # 画像256トークン + 言語10トークン（例）
+    T_action = ACTION_HORIZON
 
-    pg_hidden     = mx.zeros((B, T_prefix, PG_HIDDEN))
+    pg_hidden = mx.zeros((B, T_prefix, PG_HIDDEN))
     noisy_actions = mx.random.normal(shape=(B, T_action, ACTION_DIM))
-    timestep      = mx.array([0.5])   # τ=0.5
+    timestep = mx.array([0.5])  # τ=0.5
 
     print(f"\nInput shapes:")
     print(f"  pg_hidden:     {pg_hidden.shape}")

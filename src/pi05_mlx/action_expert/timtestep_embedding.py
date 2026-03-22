@@ -26,7 +26,7 @@ class TimestepEmbedding(nn.Module):
 
         self.mlp_in = nn.Linear(hidden, hidden, bias=True)
         self.mlp_out = nn.Linear(hidden, hidden, bias=True)
-    
+
     def __call__(self, t: mx.array) -> mx.array:
         """
         t: (B,) in [0, 1] timesteps of flow matching
@@ -40,11 +40,9 @@ class TimestepEmbedding(nn.Module):
                 math.log(1.0 / self.min_period),
                 half,
             )
-        )   # (half,)
+        )  # (half,)
         t_exp = mx.expand_dims(t, -1) * freqs  # (B, half)
-        emb = mx.concatenate(
-            [mx.sin(t_exp), mx.cos(t_exp)], axis=-1
-        )   # (B, EXP_HIDDEN)
+        emb = mx.concatenate([mx.sin(t_exp), mx.cos(t_exp)], axis=-1)  # (B, EXP_HIDDEN)
 
         # MLP: in → SiLU → out
         emb = nn.silu(self.mlp_in(emb))

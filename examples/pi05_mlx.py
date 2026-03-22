@@ -41,14 +41,14 @@ from action_expert import (
 # ═══════════════════════════════════════════════════════════════
 
 NUM_INFERENCE_STEPS = 10
-MAX_STATE_DIM       = 32
-MAX_ACTION_DIM      = 32
-STATE_BINS          = 256
-IMAGE_SIZE          = 224
-MAX_TOKEN_LEN       = 200
+MAX_STATE_DIM = 32
+MAX_ACTION_DIM = 32
+STATE_BINS = 256
+IMAGE_SIZE = 224
+MAX_TOKEN_LEN = 200
 
 SIGLIP_MEAN = np.array([0.5, 0.5, 0.5], dtype=np.float32)
-SIGLIP_STD  = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+SIGLIP_STD = np.array([0.5, 0.5, 0.5], dtype=np.float32)
 
 # カメラキーの優先順 (存在するものを最大3枚使用)
 CAMERA_KEYS = [
@@ -64,15 +64,17 @@ CAMERA_KEYS = [
 # 前処理
 # ═══════════════════════════════════════════════════════════════
 
-class Preprocessor:
 
+class Preprocessor:
     def __init__(self, tokenizer_name: str = "google/paligemma-3b-pt-224"):
         print(f"Loading tokenizer: {tokenizer_name}")
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
     def preprocess_image(self, img_bgr: np.ndarray) -> np.ndarray:
         """BGR uint8 → [-1, 1] float32 (H, W, C)"""
-        img = cv2.resize(img_bgr, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_AREA)
+        img = cv2.resize(
+            img_bgr, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_AREA
+        )
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = img.astype(np.float32) / 255.0
         img = (img - SIGLIP_MEAN) / SIGLIP_STD
@@ -105,7 +107,7 @@ class Preprocessor:
             return_tensors="np",
         )
         return {
-            "input_ids":      enc["input_ids"][0].astype(np.int32),
+            "input_ids": enc["input_ids"][0].astype(np.int32),
             "attention_mask": enc["attention_mask"][0].astype(np.int32),
         }
 
@@ -122,23 +124,24 @@ class Preprocessor:
 # PaliGemma hidden states 抽出
 # ═══════════════════════════════════════════════════════════════
 
+
 def extract_paligemma_hidden(
     pg_model,
-    images: List[np.ndarray],      # [(H,W,C) float32 in [-1,1], ...]
-    token_ids: np.ndarray,         # (max_length,) int32
+    images: List[np.ndarray],  # [(H,W,C) float32 in [-1,1], ...]
+    token_ids: np.ndarray,  # (max_length,) int32
 ) -> mx.array:
     """
     SigLIP + Projector + Gemma layers を通して
     最終 hidden states (1, T_prefix, PG_HIDDEN) を返す。
     """
     vision_tower = pg_model.vision_tower
-    projector    = pg_model.multi_modal_projector
-    lm           = pg_model.language_model
+    projector = pg_model.multi_modal_projector
+    lm = pg_model.language_model
 
     # ── 画像 embedding ──────────────────────────────────────────
     img_embeds_list = []
     for img in images:
-        pv = mx.array(img[None])           # (1, H, W, C)
+        pv = mx.array(img[None])  # (1, H, W, C)
 
         vision_out = vision_tower(pv)
         if isinstance(vision_out, tuple):
@@ -152,13 +155,13 @@ def extract_paligemma_hidden(
         if img_embed.ndim == 2:
             img_embed = mx.expand_dims(img_embed, axis=0)
 
-        img_embeds_list.append(img_embed)   # (1, 256, 2048)
+        img_embeds_list.append(img_embed)  # (1, 256, 2048)
 
     img_embeds = mx.concatenate(img_embeds_list, axis=1)  # (1, N*256, 2048)
 
     # ── テキスト embedding ──────────────────────────────────────
-    ids = mx.array(token_ids[None])                        # (1, T)
-    text_embeds = lm.model.embed_tokens(ids)               # (1, T, 2048)
+    ids = mx.array(token_ids[None])  # (1, T)
+    text_embeds = lm.model.embed_tokens(ids)  # (1, T, 2048)
 
     # ── 結合 → Gemma layers ──────────────────────────────────────
     h = mx.concatenate([img_embeds, text_embeds], axis=1)  # (1, T_total, 2048)
@@ -169,12 +172,13 @@ def extract_paligemma_hidden(
     if hasattr(lm.model, "norm"):
         h = lm.model.norm(h)
 
-    return h   # (1, T_total, 2048)
+    return h  # (1, T_total, 2048)
 
 
 # ═══════════════════════════════════════════════════════════════
 # Flow Matching 推論ループ
 # ═══════════════════════════════════════════════════════════════
+
 
 def flow_matching_sample(
     expert_model: Pi05Phase2,
@@ -193,19 +197,20 @@ def flow_matching_sample(
     for i in range(num_steps):
         t_curr = float(timesteps[i])
         t_next = float(timesteps[i + 1])
-        dt     = t_next - t_curr          # 負値 (1→0)
+        dt = t_next - t_curr  # 負値 (1→0)
 
-        tau = mx.array([t_curr] * B)      # (B,)
-        v   = expert_model(pg_hidden, x, tau)   # (B, T_action, action_dim)
-        x   = x + dt * v
+        tau = mx.array([t_curr] * B)  # (B,)
+        v = expert_model(pg_hidden, x, tau)  # (B, T_action, action_dim)
+        x = x + dt * v
         mx.eval(x)
 
-    return x   # (B, action_horizon, action_dim)
+    return x  # (B, action_horizon, action_dim)
 
 
 # ═══════════════════════════════════════════════════════════════
 # Pi05Policy: メインクラス
 # ═══════════════════════════════════════════════════════════════
+
 
 class Pi05Policy:
     """
@@ -288,14 +293,17 @@ class Pi05Policy:
         for key, val in raw.items():
             if not key.startswith(PREFIX):
                 continue
-            new_key = key[len(PREFIX):]
+            new_key = key[len(PREFIX) :]
             if new_key.startswith("language_model."):
-                new_key = "language_model.model." + new_key[len("language_model."):]
+                new_key = "language_model.model." + new_key[len("language_model.") :]
             remapped[new_key] = val
 
         # embed_tokens の tied weights 補完
         LM_HEAD = "paligemma_with_expert.paligemma.lm_head.weight"
-        if "language_model.model.embed_tokens.weight" not in remapped and LM_HEAD in raw:
+        if (
+            "language_model.model.embed_tokens.weight" not in remapped
+            and LM_HEAD in raw
+        ):
             remapped["language_model.model.embed_tokens.weight"] = raw[LM_HEAD]
 
         self.pg_model.load_weights(list(remapped.items()), strict=False)
@@ -347,9 +355,9 @@ class Pi05Policy:
           "images" : dict[str, np.ndarray (H,W,3) uint8 BGR]
           "task"   : str
         """
-        state  = observation.get("state", np.zeros(MAX_STATE_DIM, dtype=np.float32))
+        state = observation.get("state", np.zeros(MAX_STATE_DIM, dtype=np.float32))
         images = observation.get("images", {})
-        task   = observation.get("task", "")
+        task = observation.get("task", "")
 
         # 1. 状態の前処理
         norm_state = self._prepare_state(state)
@@ -358,9 +366,7 @@ class Pi05Policy:
         processed_images = []
         for key in CAMERA_KEYS:
             if key in images:
-                processed_images.append(
-                    self.preprocessor.preprocess_image(images[key])
-                )
+                processed_images.append(self.preprocessor.preprocess_image(images[key]))
             if len(processed_images) == 3:
                 break
 
@@ -375,38 +381,39 @@ class Pi05Policy:
 
         # 4. PaliGemma で prefix hidden states を取得
         pg_hidden = extract_paligemma_hidden(
-            pg_model  = self.pg_model,
-            images    = processed_images,
-            token_ids = tokens["input_ids"],
+            pg_model=self.pg_model,
+            images=processed_images,
+            token_ids=tokens["input_ids"],
         )
         mx.eval(pg_hidden)
 
         # 5. Flow Matching denoising (10 ステップ)
         actions_mlx = flow_matching_sample(
-            expert_model = self.expert_model,
-            pg_hidden    = pg_hidden,
+            expert_model=self.expert_model,
+            pg_hidden=pg_hidden,
         )
 
         # 6. numpy 変換 + 逆正規化
-        actions = np.array(actions_mlx[0])           # (action_horizon, action_dim)
+        actions = np.array(actions_mlx[0])  # (action_horizon, action_dim)
         actions = self._postprocess_action(actions)
 
         # 7. action_dim をロボットの実際の次元にトリム
         actual_dim = len(state) if len(state) <= MAX_ACTION_DIM else MAX_ACTION_DIM
         actions = actions[:, :actual_dim]
 
-        return actions   # (action_horizon, actual_action_dim)
+        return actions  # (action_horizon, actual_action_dim)
 
 
 # ═══════════════════════════════════════════════════════════════
 # 動作確認
 # ═══════════════════════════════════════════════════════════════
 
+
 def verify(pi05_repo_or_path: str, image_url: str):
     print("\n=== π₀.₅ MLX: select_action テスト ===\n")
 
     policy = Pi05Policy(
-        pi05_repo = pi05_repo_or_path,   # Action Expert 等フル重み
+        pi05_repo=pi05_repo_or_path,  # Action Expert 等フル重み
     )
 
     # Web から画像取得
@@ -417,7 +424,7 @@ def verify(pi05_repo_or_path: str, image_url: str):
     assert img_bgr is not None
 
     # observation を構築
-    STATE_DIM  = 14   # 例: シングルアーム 6 joint + gripper + ...
+    STATE_DIM = 14  # 例: シングルアーム 6 joint + gripper + ...
     observation = {
         "state": np.random.uniform(-0.5, 0.5, size=(STATE_DIM,)).astype(np.float32),
         "images": {
@@ -443,8 +450,8 @@ def verify(pi05_repo_or_path: str, image_url: str):
 
 
 if __name__ == "__main__":
-    PI05_REPO       = "./models/FIwaki/pi05_base_mlx_bf16"
-    IMAGE_URL       = "http://images.cocodataset.org/val2017/000000039769.jpg"
+    PI05_REPO = "./models/FIwaki/pi05_base_mlx_bf16"
+    IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 
     verify(
         pi05_repo_or_path=PI05_REPO,

@@ -17,7 +17,7 @@ from huggingface_hub import HfApi, snapshot_download
 # 設定
 # ═══════════════════════════════════════════════════════════════
 
-MODEL_DIR  = "./models/lerobot/pi05_base"
+MODEL_DIR = "./models/lerobot/pi05_base"
 OUTPUT_DIR = "./models/FIwaki/pi05_base_mlx_bf16"
 HF_REPO_ID = "FIwaki/pi05_base_mlx_bf16"
 
@@ -33,6 +33,7 @@ COPY_FILES = [
 # ═══════════════════════════════════════════════════════════════
 # 変換
 # ═══════════════════════════════════════════════════════════════
+
 
 def convert_pi05_to_mlx_bf16(input_path: str, output_dir: str):
     """
@@ -63,7 +64,9 @@ def convert_pi05_to_mlx_bf16(input_path: str, output_dir: str):
         # Conv2d weight: [O,I,H,W] → [O,H,W,I]
         if "patch_embedding.weight" in key and mlx_array.ndim == 4:
             mlx_array = mx.transpose(mlx_array, (0, 2, 3, 1))
-            print(f"  Transposed Conv2d: {key}  {list(tensor.shape)} → {list(mlx_array.shape)}")
+            print(
+                f"  Transposed Conv2d: {key}  {list(tensor.shape)} → {list(mlx_array.shape)}"
+            )
 
         # bf16 にキャスト
         mlx_tensors[key] = mlx_array.astype(mx.bfloat16)
@@ -80,6 +83,7 @@ def convert_pi05_to_mlx_bf16(input_path: str, output_dir: str):
 # ═══════════════════════════════════════════════════════════════
 # 付属ファイルのコピー
 # ═══════════════════════════════════════════════════════════════
+
 
 def copy_metadata(src_dir: str, dst_dir: str):
     """lerobot/pi05_base の設定ファイル類をコピーする"""
@@ -194,6 +198,7 @@ def copy_metadata(src_dir: str, dst_dir: str):
 # HuggingFace へのアップロード
 # ═══════════════════════════════════════════════════════════════
 
+
 def upload_to_huggingface(output_dir: str, repo_id: str):
     """変換済みモデルを HuggingFace Hub にアップロードする"""
     api = HfApi()
@@ -215,7 +220,7 @@ def upload_to_huggingface(output_dir: str, repo_id: str):
 # ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    src_dir    = Path(MODEL_DIR)
+    src_dir = Path(MODEL_DIR)
     input_path = src_dir / "model.safetensors"
 
     # 1. PyTorch テンソルを一度だけ読み込む
@@ -236,5 +241,5 @@ if __name__ == "__main__":
     # )
 
     # 4. 両方アップロード
-    upload_to_huggingface(OUTPUT_DIR,    "FIwaki/pi05_base_mlx_bf16")
+    upload_to_huggingface(OUTPUT_DIR, "FIwaki/pi05_base_mlx_bf16")
     # upload_to_huggingface(PALIGEMMA_DIR, "FIwaki/pi05_paligemma_mlx")
