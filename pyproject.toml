@@ -22,3 +22,9 @@ dependencies = [
     "rich>=14.3.3",
     "torch>=2.10.0",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.7",
+    "ty>=0.0.24",
+]
