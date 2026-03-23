@@ -66,3 +66,28 @@ options:
   --state-dim STATE_DIM
                         A number of a state dimension and action dimension
 ```
+
+## Acknowledgements
+
+This project builds upon the following works:
+
+- **$\pi_{0.5}$ (pi0.5)** — The original model and official implementation by Physical Intelligence.
+  - Paper: Physical Intelligence et al., *"$\pi_{0.5}$: a Vision-Language-Action Model with Open-World Generalization"*, arXiv:2504.16054 (2025). https://arxiv.org/abs/2504.16054
+  - Official repository: https://github.com/Physical-Intelligence/openpi
+  - Blog post: https://www.pi.website/blog/pi05
+
+## Citation
+
+If you use this repository, please also cite the original $\pi_{0.5}$ paper:
+
+```bibtex
+@misc{pi05_2025,
+  title     = {$\pi_{0.5}$: a Vision-Language-Action Model with Open-World Generalization},
+  author    = {{Physical Intelligence} and Kevin Black and Noah Brown and James Darpinian and Karan Dhabalia and Danny Driess and Adnan Esmail and Michael Equi and Chelsea Finn and Niccolo Fusai and Manuel Y. Galliker and Dibya Ghosh and Lachy Groom and Karol Hausman and Brian Ichter and Szymon Jakubczak and Tim Jones and Liyiming Ke and Devin LeBlanc and Sergey Levine and Adrian Li-Bell and Mohith Mothukuri and Suraj Nair and Karl Pertsch and Allen Z. Ren and Lucy Xiaoyang Shi and Laura Smith and Jost Tobias Springenberg and Kyle Stachowicz and James Tanner and Quan Vuong and Homer Walke and Anna Walling and Haohuan Wang and Lili Yu and Ury Zhilinsky},
+  year      = {2025},
+  eprint    = {2504.16054},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url       = {https://arxiv.org/abs/2504.16054}
+}
+```
