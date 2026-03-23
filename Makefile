@@ -1,5 +1,8 @@
 .PHONY:
-	help
+	help \
+	convert-h \
+	convert \
+	test
 
 .DEFAULT_GOAL := help
 
