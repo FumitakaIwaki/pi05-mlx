@@ -1,27 +1,18 @@
-# convert_pi05_to_mlx.py
-# lerobot/pi05_base を MLX bf16 形式に変換し HuggingFace にアップロードする
-#
-# 必要:
-#   pip install torch safetensors mlx huggingface_hub
-#   huggingface-cli login
-
+import argparse
+import logging
 import shutil
 from pathlib import Path
+from rich.logging import RichHandler
 
 import mlx.core as mx
 from safetensors.torch import load_file as torch_load_file
-from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub import HfApi
 
 
 # ═══════════════════════════════════════════════════════════════
-# 設定
+# Constants
 # ═══════════════════════════════════════════════════════════════
 
-MODEL_DIR = "./models/lerobot/pi05_base"
-OUTPUT_DIR = "./models/FIwaki/pi05_base_mlx_bf16"
-HF_REPO_ID = "FIwaki/pi05_base_mlx_bf16"
-
-# lerobot/pi05_base からコピーするファイル
 COPY_FILES = [
     "config.json",
     "policy_preprocessor.json",
@@ -29,217 +20,183 @@ COPY_FILES = [
     "README.md",
 ]
 
-
-# ═══════════════════════════════════════════════════════════════
-# 変換
-# ═══════════════════════════════════════════════════════════════
-
-
-def convert_pi05_to_mlx_bf16(input_path: str, output_dir: str):
-    """
-    lerobot/pi05_base の model.safetensors を MLX bf16 形式に変換して保存する。
-
-    変換内容:
-      - float32 → bfloat16 (mx.save_safetensors でネイティブ bf16 保存)
-      - Conv2d weight: PyTorch [O,I,H,W] → MLX [O,H,W,I]
-      - その他のテンソルはキー名そのまま保持
-    """
-    input_path = Path(input_path)
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Loading: {input_path}  ({input_path.stat().st_size / 1e9:.1f} GB)")
-    pt_tensors = torch_load_file(str(input_path), device="cpu")
-    print(f"Total tensors: {len(pt_tensors)}")
-
-    mlx_tensors = {}
-    for i, (key, tensor) in enumerate(pt_tensors.items()):
-        if i % 100 == 0:
-            print(f"  [{i}/{len(pt_tensors)}] converting...")
-
-        # float32 経由で numpy → MLX array に変換
-        np_array = tensor.float().numpy()
-        mlx_array = mx.array(np_array)
-
-        # Conv2d weight: [O,I,H,W] → [O,H,W,I]
-        if "patch_embedding.weight" in key and mlx_array.ndim == 4:
-            mlx_array = mx.transpose(mlx_array, (0, 2, 3, 1))
-            print(
-                f"  Transposed Conv2d: {key}  {list(tensor.shape)} → {list(mlx_array.shape)}"
-            )
-
-        # bf16 にキャスト
-        mlx_tensors[key] = mlx_array.astype(mx.bfloat16)
-
-    # MLX ネイティブで bf16 safetensors として保存
-    output_path = str(output_dir / "model.safetensors")
-    print(f"\nSaving to {output_path} ...")
-    mx.save_safetensors(output_path, mlx_tensors)
-
-    size_gb = Path(output_path).stat().st_size / 1e9
-    print(f"Saved. ({size_gb:.2f} GB)")
+DTYPE_MAP = {
+    "float32": mx.float32,
+    "float16": mx.float16,
+    "bfloat16": mx.bfloat16,
+    # Abbreviation
+    "fp32": mx.float32,
+    "fp16": mx.float16,
+    "bf16": mx.bfloat16,
+}
 
 
 # ═══════════════════════════════════════════════════════════════
-# 付属ファイルのコピー
+# Converter class
 # ═══════════════════════════════════════════════════════════════
 
 
-def copy_metadata(src_dir: str, dst_dir: str):
-    """lerobot/pi05_base の設定ファイル類をコピーする"""
-    src_dir = Path(src_dir)
-    dst_dir = Path(dst_dir)
+class PI05MLXConverter:
+    def __init__(
+        self,
+        model_dir: str,
+        output_dir: str,
+        dtype: str = "bfloat16",
+        logger: logging.Logger | None = None,
+    ):
+        self.model_dir = Path(model_dir)
+        self.output_dir = Path(output_dir)
+        self.dtype = dtype
+        self.logger = logger or logging.getLogger(__name__)
 
-    for fname in COPY_FILES:
-        src = src_dir / fname
-        if src.exists():
-            shutil.copy(src, dst_dir / fname)
-            print(f"Copied: {fname}")
-        else:
-            print(f"Skipped (not found): {fname}")
+    def convert(self):
+        """
+        Convert model.safetensors from lerobot/pi05_base to MLX format and save.
 
+        Conversions applied:
+          - float32 -> specified dtype (saved natively via mx.save_safetensors)
+          - Conv2d weight: PyTorch [O,I,H,W] -> MLX [O,H,W,I]
+          - All other tensors are kept as-is with their original key names
+        """
+        mx_dtype = DTYPE_MAP[self.dtype]
+        input_path = self.model_dir / "model.safetensors"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-# ═══════════════════════════════════════════════════════════════
-# mlx_vlmで読み込める形式に変換
-# ═══════════════════════════════════════════════════════════════
+        self.logger.info(f"Loading: {input_path}  ({input_path.stat().st_size / 1e9:.1f} GB)")
+        pt_tensors = torch_load_file(str(input_path), device="cpu")
+        self.logger.info(f"Total tensors: {len(pt_tensors)}")
 
-# def build_mlx_vlm_compatible_repo(
-#     mlx_weights_path: str,   # 変換済み model.safetensors
-#     output_dir: str,
-#     src_pt_tensors: dict,    # torch_load_file で読んだ元テンソル辞書
-# ):
-#     """
-#     mlx-vlm の load() が直接受け付けられるディレクトリを構成する。
-#     1. PaliGemma 重みをキーリマップして model.safetensors に保存
-#     2. config.json を生成
-#     3. tokenizer / preprocessor_config を取得
-#     """
-#     output_dir = Path(output_dir)
-#     output_dir.mkdir(parents=True, exist_ok=True)
+        mlx_tensors = {}
+        for i, (key, tensor) in enumerate(pt_tensors.items()):
+            if i % 100 == 0:
+                self.logger.info(f"  [{i}/{len(pt_tensors)}] converting...")
 
-#     # ── 1. PaliGemma 重みのキーリマップ ──────────────────────────
-#     PREFIX = "paligemma_with_expert.paligemma.model."
-#     remapped = {}
+            # Convert to numpy via float32, then to MLX array
+            np_array = tensor.float().numpy()
+            mlx_array = mx.array(np_array)
 
-#     for key, tensor in src_pt_tensors.items():
-#         if not key.startswith(PREFIX):
-#             continue
-#         new_key = key[len(PREFIX):]
-#         # language_model.layers.* → language_model.model.layers.*
-#         if new_key.startswith("language_model."):
-#             new_key = "language_model.model." + new_key[len("language_model."):]
-#         np_array = tensor.float().numpy()
-#         mlx_array = mx.array(np_array)
-#         if "patch_embedding.weight" in key and mlx_array.ndim == 4:
-#             mlx_array = mx.transpose(mlx_array, (0, 2, 3, 1))
-#         remapped[new_key] = mlx_array.astype(mx.bfloat16)
+            # Conv2d weight: [O,I,H,W] -> [O,H,W,I]
+            if "patch_embedding.weight" in key and mlx_array.ndim == 4:
+                mlx_array = mx.transpose(mlx_array, (0, 2, 3, 1))
+                self.logger.info(
+                    f"  Transposed Conv2d: {key}  {list(tensor.shape)} → {list(mlx_array.shape)}"
+                )
 
-#     # embed_tokens の tied weights 補完
-#     LM_HEAD = "paligemma_with_expert.paligemma.lm_head.weight"
-#     if "language_model.model.embed_tokens.weight" not in remapped \
-#             and LM_HEAD in src_pt_tensors:
-#         t = src_pt_tensors[LM_HEAD]
-#         remapped["language_model.model.embed_tokens.weight"] = \
-#             mx.array(t.float().numpy()).astype(mx.bfloat16)
+            # Cast to the specified dtype
+            mlx_tensors[key] = mlx_array.astype(mx_dtype)
 
-#     out_path = str(output_dir / "model.safetensors")
-#     mx.save_safetensors(out_path, remapped)
-#     print(f"Saved remapped PaliGemma weights: {len(remapped)} keys → {out_path}")
+        # Save natively as safetensors via MLX
+        output_path = str(self.output_dir / "model.safetensors")
+        self.logger.info(f"\nSaving to {output_path} ...")
+        mx.save_safetensors(output_path, mlx_tensors)
 
-#     # ── 2. config.json を生成 ─────────────────────────────────────
-#     import json
-#     config = {
-#         "model_type": "paligemma",
-#         "text_config": {
-#             "model_type": "gemma",
-#             "hidden_size": 2048,
-#             "intermediate_size": 16384,
-#             "num_hidden_layers": 18,
-#             "num_attention_heads": 8,
-#             "num_key_value_heads": 1,
-#             "vocab_size": 257152,
-#             "rope_theta": 10000.0,
-#             "rms_norm_eps": 1e-6,
-#         },
-#         "vision_config": {
-#             "model_type": "siglip_vision_model",
-#             "hidden_size": 1152,
-#             "intermediate_size": 4304,
-#             "num_hidden_layers": 27,
-#             "num_attention_heads": 16,
-#             "image_size": 224,
-#             "patch_size": 14,
-#         },
-#         "projection_dim": 2048,
-#         "ignore_index": -100,
-#         "image_token_index": 257152,
-#         "vocab_size": 257152,
-#     }
-#     with open(output_dir / "config.json", "w") as f:
-#         json.dump(config, f, indent=2)
-#     print("Saved config.json")
+        size_gb = Path(output_path).stat().st_size / 1e9
+        self.logger.info(f"Saved. ({size_gb:.2f} GB)")
 
-#     # ── 3. tokenizer / preprocessor_config を取得 ─────────────────
-#     print("Downloading tokenizer from google/paligemma-3b-pt-224 ...")
-#     tmp = output_dir / "_tmp_tokenizer"
-#     snapshot_download(
-#         repo_id="google/paligemma-3b-pt-224",
-#         allow_patterns=["tokenizer*", "special_tokens_map.json", "preprocessor_config.json"],
-#         local_dir=str(tmp),
-#     )
-#     for f in tmp.rglob("*"):
-#         if f.is_file():
-#             shutil.copy(f, output_dir / f.name)
-#     shutil.rmtree(tmp, ignore_errors=True)
-#     print("Tokenizer ready.")
+    def copy_metadata(self):
+        """Copy config and metadata files from the source model directory."""
+        for fname in COPY_FILES:
+            src = self.model_dir / fname
+            if src.exists():
+                shutil.copy(src, self.output_dir / fname)
+                self.logger.info(f"Copied: {fname}")
+            else:
+                self.logger.info(f"Skipped (not found): {fname}")
+
+    def upload_to_huggingface(self, repo_id: str, private: bool = False):
+        """Upload the converted model to HuggingFace Hub."""
+        api = HfApi()
+
+        self.logger.info(f"\nCreating repo: {repo_id} (private={private})")
+        api.create_repo(repo_id, exist_ok=True, private=private)
+
+        self.logger.info(f"Uploading {self.output_dir} → {repo_id} ...")
+        api.upload_folder(
+            folder_path=str(self.output_dir),
+            repo_id=repo_id,
+            commit_message="Add MLX converted pi05_base weights",
+        )
+        self.logger.info(f"Done: https://huggingface.co/{repo_id}")
+
+    def run(
+        self,
+        push_to_hub: bool = False,
+        hf_repo_id: str | None = None,
+        private: bool = False,
+    ):
+        """Run conversion, metadata copy, and optionally upload to HuggingFace Hub."""
+        self.convert()
+        self.copy_metadata()
+
+        if push_to_hub:
+            if hf_repo_id is None:
+                raise ValueError("--hf-repo-id is required when --push-to-hub is set")
+            self.upload_to_huggingface(hf_repo_id, private=private)
 
 
 # ═══════════════════════════════════════════════════════════════
-# HuggingFace へのアップロード
+# CLI
 # ═══════════════════════════════════════════════════════════════
 
+parser = argparse.ArgumentParser(
+    description="Covert PyTorch based pi05 to MLX based and push to HF"
+)
+parser.add_argument(
+    "--model-dir",
+    required=True,
+    help="Path to the model to convert",
+)
+parser.add_argument(
+    "--output-dir",
+    default="./converted_model",
+    help="Path to the directory for converted models (default: ./converted_model)",
+)
+parser.add_argument(
+    "--hf-repo-id",
+    default=None,
+    help="Repo id for HF (default: None)",
+)
+parser.add_argument(
+    "--dtype",
+    default="bfloat16",
+    choices=[
+        "float32", "fp32",
+        "float16", "fp16",
+        "bfloat16", "bf16",
+    ],
+    help="MLX dtype for the converted model (default: bfloat16)",
+)
+parser.add_argument(
+    "--push-to-hub",
+    action="store_true",
+    help="Wether push the converted model to HF or not",
+)
+parser.add_argument(
+    "--private",
+    action="store_true",
+    help="Wether the repository make prvate or not",
+)
 
-def upload_to_huggingface(output_dir: str, repo_id: str):
-    """変換済みモデルを HuggingFace Hub にアップロードする"""
-    api = HfApi()
-
-    print(f"\nCreating repo: {repo_id}")
-    api.create_repo(repo_id, exist_ok=True)
-
-    print(f"Uploading {output_dir} → {repo_id} ...")
-    api.upload_folder(
-        folder_path=output_dir,
-        repo_id=repo_id,
-        commit_message="Add MLX bf16 converted pi05_base weights",
-    )
-    print(f"Done: https://huggingface.co/{repo_id}")
-
-
-# ═══════════════════════════════════════════════════════════════
-# メイン
-# ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    src_dir = Path(MODEL_DIR)
-    input_path = src_dir / "model.safetensors"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(rich_tracebacks=True, markup=True)],
+    )
+    logger = logging.getLogger(__file__)
 
-    # 1. PyTorch テンソルを一度だけ読み込む
-    print(f"Loading: {input_path}")
-    pt_tensors = torch_load_file(str(input_path), device="cpu")
+    args = parser.parse_args()
 
-    # 2. フル変換（全キー bf16）→ pi05_base_mlx_bf16 へ
-    convert_pi05_to_mlx_bf16(str(input_path), OUTPUT_DIR)
-    copy_metadata(src_dir, OUTPUT_DIR)
-
-    # 3. PaliGemma リマップ済み → pi05_paligemma_mlx へ
-    #    これが mlx-vlm の load() に直接渡せるディレクトリになる
-    # PALIGEMMA_DIR = OUTPUT_DIR.replace("pi05_base_mlx_bf16", "pi05_paligemma_mlx")
-    # build_mlx_vlm_compatible_repo(
-    #     mlx_weights_path = OUTPUT_DIR + "/model.safetensors",
-    #     output_dir       = PALIGEMMA_DIR,
-    #     src_pt_tensors   = pt_tensors,
-    # )
-
-    # 4. 両方アップロード
-    upload_to_huggingface(OUTPUT_DIR, "FIwaki/pi05_base_mlx_bf16")
-    # upload_to_huggingface(PALIGEMMA_DIR, "FIwaki/pi05_paligemma_mlx")
+    converter = PI05MLXConverter(
+        model_dir=args.model_dir,
+        output_dir=args.output_dir,
+        dtype=args.dtype,
+        logger=logger,
+    )
+    converter.run(
+        push_to_hub=args.push_to_hub,
+        hf_repo_id=args.hf_repo_id,
+        private=args.private,
+    )

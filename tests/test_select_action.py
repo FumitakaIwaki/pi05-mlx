@@ -1,3 +1,4 @@
+import argparse
 import cv2
 import logging
 import numpy as np
@@ -8,12 +9,30 @@ import urllib
 from pi05_mlx.action_expert import ActionExpertConfig
 from pi05_mlx.model import PI05Config, PI05Policy
 
-STATE_DIM = 14
+
+parser = argparse.ArgumentParser(description="Test π₀.₅ MLX select_action")
+parser.add_argument(
+    "--pi05-repo-or-path",
+    default="./models/FIwaki/pi05_base_mlx_bf16",
+    help="Path or HuggingFace repo ID for the pi05 model (default: ./models/FIwaki/pi05_base_mlx_bf16)",
+)
+parser.add_argument(
+    "--image-url-or-path",
+    default="http://images.cocodataset.org/val2017/000000039769.jpg",
+    help="URL or local path to the input image",
+)
+parser.add_argument(
+    "--state-dim",
+    type=int,
+    default=14,
+    help="A number of a state dimension and action dimension",
+)
 
 
 def main(
     pi05_repo_or_path: str,
     image_url_or_path: str,
+    state_dim: str = 14,
     logger: logging.Logger = logging.getLogger(__file__),
 ):
     logger.info("\n=== Testing π₀.₅ MLX: select_action ===\n")
@@ -39,7 +58,7 @@ def main(
     assert img_bgr is not None
 
     observation = {
-        "state": np.random.uniform(-0.5, 0.5, size=(STATE_DIM,)).astype(np.float32),
+        "state": np.random.uniform(-0.5, 0.5, size=(state_dim,)).astype(np.float32),
         "images": {
             "base_0_rgb": img_bgr,
         },
@@ -67,6 +86,8 @@ def main(
 
 
 if __name__ == "__main__":
+    args = parser.parse_args()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
@@ -75,11 +96,9 @@ if __name__ == "__main__":
     )
     logger = logging.getLogger(__file__)
 
-    PI05_REPO = "./models/FIwaki/pi05_base_mlx_bf16"
-    IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
-
     main(
-        pi05_repo_or_path=PI05_REPO,
-        image_url_or_path=IMAGE_URL,
+        pi05_repo_or_path=args.pi05_repo_or_path,
+        image_url_or_path=args.image_url_or_path,
+        state_dim=args.state_dim,
         logger=logger,
     )
