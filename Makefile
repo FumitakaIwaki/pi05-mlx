@@ -1,5 +1,8 @@
 .PHONY:
-	help
+	help \
+	convert-h \
+	convert \
+	test
 
 .DEFAULT_GOAL := help
 
@@ -21,5 +24,20 @@ include .env
 
 ### Examples ###
 
+convert-h:
+	uv run python -m src.pi05_mlx.mlx_converter.convert -h
+
 convert:
-	uv run python -m src.pi05_mlx.mlx_converter.convert
+	uv run python -m src.pi05_mlx.mlx_converter.convert \
+		--model-dir ./models/lerobot/pi05_base \
+		--output-dir ./models/FIwaki/pi05_base_mlx_bf16 \
+		--hf-repo-id FIwaki/pi05_base_mlx_bf16 \
+		--dtype bf16 \
+		--push-to-hub \
+		--private
+
+test:
+	uv run ./tests/test_select_action.py \
+		--pi05-repo-or-path ./models/FIwaki/pi05_base_mlx_bf16 \
+		--image-url-or-path http://images.cocodataset.org/val2017/000000039769.jpg \
+		--state-dim 14
